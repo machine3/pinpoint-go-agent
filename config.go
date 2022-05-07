@@ -25,16 +25,18 @@ type Config struct {
 
 	LogLevel logrus.Level
 
-	Sampling struct {
-		Rate               int
-		NewThroughput      int
-		ContinueThroughput int
-	}
+	Sampling Sampling
 
 	Stat struct {
 		CollectInterval int
 		BatchCount      int
 	}
+}
+
+type Sampling struct {
+	Rate               int
+	NewThroughput      int
+	ContinueThroughput int
 }
 
 type ConfigOption func(*Config)

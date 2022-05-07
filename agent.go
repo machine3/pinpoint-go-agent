@@ -41,7 +41,7 @@ type Agent struct {
 	spanBuffer []*span
 	spanChan   chan *span
 	wg         sync.WaitGroup
-	sampler    traceSampler
+	sampler    atomic.Value
 
 	exceptionIdCache *lru.Cache
 	exceptionIdGen   int32
@@ -104,14 +104,7 @@ func NewAgent(config *Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	baseSampler := newRateSampler(uint64(config.Sampling.Rate))
-	if config.Sampling.NewThroughput > 0 || config.Sampling.ContinueThroughput > 0 {
-		agent.sampler = newThroughputLimitTraceSampler(baseSampler, config.Sampling.NewThroughput, config.Sampling.ContinueThroughput)
-	} else {
-		agent.sampler = newBasicTraceSampler(baseSampler)
-	}
-
+	agent.SetSampling(config.Sampling)
 	agent.enable = true
 	agent.agentGrpc.sendAgentInfo()
 	agent.agentGrpc.sendApiMetadata(asyncApiId, "Asynchronous Invocation", -1, ApiTypeInvocation)
@@ -122,6 +115,18 @@ func NewAgent(config *Config) (*Agent, error) {
 	agent.wg.Add(3)
 
 	return &agent, nil
+}
+
+func (agent *Agent) SetSampling(sampling Sampling) {
+	baseSampler := newRateSampler(uint64(sampling.Rate))
+
+	var sampler traceSampler
+	if sampling.NewThroughput > 0 || sampling.ContinueThroughput > 0 {
+		sampler = newThroughputLimitTraceSampler(baseSampler, sampling.NewThroughput, sampling.ContinueThroughput)
+	} else {
+		sampler = newBasicTraceSampler(baseSampler)
+	}
+	agent.sampler.Store(sampler)
 }
 
 func (agent *Agent) Shutdown() {
@@ -169,16 +174,17 @@ func (agent *Agent) NewSpanTracerWithReader(operation string, reader Distributed
 	var tracer Tracer
 	isSampled := false
 
+	sampler := agent.sampler.Load().(traceSampler)
 	tid := reader.Get(HttpTraceId)
 	if tid == "" {
-		if agent.sampler.isNewSampled() {
+		if sampler.isNewSampled() {
 			tracer = newSampledSpan(agent, operation)
 			isSampled = true
 		} else {
 			tracer = newNoopSpan(agent)
 		}
 	} else {
-		if agent.sampler.isContinueSampled() {
+		if sampler.isContinueSampled() {
 			tracer = newSampledSpan(agent, operation)
 			isSampled = true
 		} else {
